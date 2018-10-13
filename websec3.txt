@@ -1,0 +1,72 @@
+On the level3, caption is ChaChaCha! (weird)
+Apparently we are supposed to find a SHA1 collision, there is also a note about php types being sloppy.
+
+Here's the important bit in the server side code:
+
+    $h2 = password_hash (sha1($_POST['c'], fa1se), PASSWORD_BCRYPT);
+    echo "<div class='row'>";
+    if (password_verify (sha1($flag, fa1se), $h2) === true){ 
+	echo "<p>Here is your flag: <mark>$flag</mark></p>"; 
+    } else {
+        echo "<p>Here is the <em>hash</em> of your flag: <mark>" . sha1($flag, false) . "</mark></p>";
+    }
+
+Input: AAAA
+Result:
+	Here is the hash of your flag: 7c00249d409a91ab84e3f421c193520d9fb3674b
+
+So the input has to create a collision with that output above...
+
+Funny thing:
+After I pasted the source code into this write up, which has a slightly different font than the browser I copied it from, it became obvious that the first 2 calls to sha1() have a typo in the second parameter "fa1se" instead of "false".
+
+Important functions in this problem:
+	sha1(string,raw)
+	string password_hash ( string $password , int $algo [, array $options ] )
+		$algo is PASSWORD_BCRYPT here
+	bool password_verify ( string $password , string $hash )
+
+I read about a type juggling attack for md5 hashes compared with == instead of ===. This would cause problems if the hash values (a string) started with 0e[...], the php type convertion would convert it to a number or the form 0^[...], which will always be 0. That's not the case here, we are using === :(
+	https://pen-testing.sans.org/blog/2014/12/18/php-weak-typing-woes-with-some-pontification-about-code-and-pen-testing
+
+I tried many different things in the last few hours, trying to find holes in the implementation (which the problem claims is flawless)... 
+Interestingly, I ran sha1($_POST['c'],fa1se) in an online php interpreter and no error was thrown. It's obvious that the typo must make the second parameter a non-boolean thing, it throws an error in the interpreter...
+I wonder what var_dump() has to say about this mysterious interpretation?
+	
+	var_dump((bool)fa1se)
+	(bool)true
+
+	var_dump((bool)fall1se)
+	(bool)true
+
+Weird... Looks like it defaults to true?!? This is sort of in line with the problem declaration: 
+"[...] with sha1 (that does accept arrays and other weird things) [...]" 
+
+What if this is the case? That would mean that the password_verify() function would be comparing raw binary outputs of sha1()instead of the expected hex string that is returned when the second parameter of sha1() is set to false.
+
+What are the implications of this? Well, if we look at the output of the hashed flag listed above, the first byte is represented as 7c, and the second as 00. Which means the second byte of the hashed flag is the null byte, which terminates strings in C. If this is true, even though the stored hash might be the full 7c00249d409a91ab84e3f421c193520d9fb3674b, the password verify function will only read the first byte for its assertion. 
+
+This can mean that all we have to do is find an input text that hashes to something starting with 7c00. That's a lot easier that reproducing last year's attack on sha1 ;)
+
+I wrote this crude brute forcer in python, just iterating through numbers because it's easy to write:
+	
+	import hashlib, binascii
+  
+	magic = '7c00'
+	for to_hash in range(1000000):
+	        b = binascii.hexlify(hashlib.sha1(str(to_hash)).digest())
+	        nibble = b[0:4]
+
+	        if nibble == magic:
+	                print to_hash
+	                print b
+	                break
+	        else:
+	                print "Doh!"
+
+That found this input to work in about 2 seconds: 
+	104610
+	7c00f12c6e5cc9bd7239209971d5997c6953aba4
+
+Sure enough: 
+	Here is your flag: WEBSEC{Please_Do_not_combine_rAw_hash_functions_mi}
